@@ -20,6 +20,10 @@ public class PatientModelLoader : MonoBehaviour
     [Header("UI Feedback")]
     public TMPro.TextMeshProUGUI statusText;  // optional, for showing status
 
+    [Header("Anatomy Systems")]
+    public AnatomyController anatomyController;
+    public TransformGizmo transformGizmo;
+
     private GameObject currentModel;
     private string lastPatientId;
     private float lastConfidence;
@@ -252,6 +256,17 @@ public class PatientModelLoader : MonoBehaviour
             spawnPos.y = arCamera.transform.position.y - 0.5f;
             root.transform.position = spawnPos;
         }
+        // Wire anatomy systems to the newly loaded model
+        if (anatomyController != null)
+        {
+            anatomyController.bodyRoot = root.transform;
+            anatomyController.enabled = true;
+        }
+        if (transformGizmo != null)
+        {
+            transformGizmo.bodyRoot = root.transform;
+            transformGizmo.enabled = true;
+        }   
     }
 
     private void SetStatus(string msg)
