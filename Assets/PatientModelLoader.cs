@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using GLTFast;
+using GLTFast.Logging;
 
 public class PatientModelLoader : MonoBehaviour
 {
@@ -15,7 +16,6 @@ public class PatientModelLoader : MonoBehaviour
 
     [Header("Scene")]
     public Transform spawnParent;   // where the loaded model will be placed
-    public Camera arCamera;
 
     [Header("UI Feedback")]
     public TMPro.TextMeshProUGUI statusText;  // optional, for showing status
@@ -23,6 +23,7 @@ public class PatientModelLoader : MonoBehaviour
     private GameObject currentModel;
     private string lastPatientId;
     private float lastConfidence;
+    private bool isMatching = false;
 
     // ── Discovery ─────────────────────────────────────────────────────────────
     private const int BroadcastPort = 5013;
@@ -31,6 +32,8 @@ public class PatientModelLoader : MonoBehaviour
     private volatile bool discoveryRunning = false;
     private volatile string discoveredIP = null;
     private volatile string pendingStatus = null;
+
+    private GltfImport currentGltfImport;
 
     void Start()
     {
@@ -49,6 +52,12 @@ public class PatientModelLoader : MonoBehaviour
 
     void OnDestroy()
     {
+        if (currentGltfImport != null)
+        {
+            currentGltfImport.Dispose();
+            currentGltfImport = null;
+        }
+
         StopServerDiscovery();
     }
 
@@ -94,9 +103,10 @@ public class PatientModelLoader : MonoBehaviour
 
                         if (firstDiscovery)
                             pendingStatus = $"Server found: {serverIP}";
-                            // Stop discovery — we have what we need
-                            discoveryRunning = false;
-                            break;
+
+                        // Stop discovery — we have what we need
+                        discoveryRunning = false;
+                        break;
                     }
                 }
                 catch (SocketException)
@@ -135,16 +145,34 @@ public class PatientModelLoader : MonoBehaviour
 
     public async void OnMatchButtonPressed()
     {
-        if (string.IsNullOrEmpty(discoveredIP))
+        if (isMatching)
         {
-            SetStatus("No server found yet. Waiting...");
+            SetStatus("Already matching, please wait...");
             return;
         }
+        isMatching = true;
 
-        SetStatus($"Connecting to {serverIP}...");
+        if (currentGltfImport != null)
+        {
+            currentGltfImport.Dispose();
+            currentGltfImport = null;
+        }
+
+        if (currentModel != null)
+        {
+            Destroy(currentModel);
+            currentModel = null;
+        }
 
         try
         {
+            if (string.IsNullOrEmpty(discoveredIP))
+            {
+                SetStatus("No server found yet. Waiting...");
+                return;
+            }
+
+            SetStatus($"Connecting to {serverIP}...");
             SetStatus("Requesting match...");
             byte[] glbData = await SendMatchRequestAndReceiveGlb();
 
@@ -163,6 +191,10 @@ public class PatientModelLoader : MonoBehaviour
         {
             SetStatus($"Error: {e.Message}");
             Debug.LogError($"PatientModelLoader error: {e}");
+        }
+        finally
+        {
+            isMatching = false;
         }
     }
 
@@ -219,38 +251,59 @@ public class PatientModelLoader : MonoBehaviour
 
     private async Task LoadModelFromBytes(byte[] glbData)
     {
-        if (currentModel != null)
-        {
-            Destroy(currentModel);
-        }
+        var logger = new ConsoleLogger();
+        var gltfImport = new GltfImport(logger: logger);
 
-        var gltfImport = new GltfImport();
-        bool success = await gltfImport.LoadGltfBinary(glbData);
+        // uri param optional agar GLB self-contained hai (embedded textures)
+        bool success = await gltfImport.Load(glbData);
 
         if (!success)
-        {
             throw new Exception("Failed to parse GLB data");
-        }
 
         GameObject root = new GameObject($"PatientModel_{lastPatientId}");
         root.transform.SetParent(spawnParent != null ? spawnParent : transform);
+        root.transform.localPosition = Vector3.zero;
+        root.transform.localRotation = Quaternion.identity;
 
-        var instantiator = new GameObjectInstantiator(gltfImport, root.transform);
+        var instantiator = new GameObjectInstantiator(gltfImport, root.transform, logger: logger);
         success = await gltfImport.InstantiateMainSceneAsync(instantiator);
 
         if (!success)
-        {
             throw new Exception("Failed to instantiate GLB scene");
-        }
+
+        FixMaterialsForQuest(root);
 
         currentModel = root;
+        currentGltfImport = gltfImport;
+    }
 
-        if (arCamera != null)
+    private void FixMaterialsForQuest(GameObject root)
+    {
+        var renderers = root.GetComponentsInChildren<Renderer>();
+        Shader urpLit = Shader.Find("Universal Render Pipeline/Lit");
+
+        if (urpLit == null)
         {
-            Vector3 spawnPos = arCamera.transform.position +
-                               arCamera.transform.forward * 1.5f;
-            spawnPos.y = arCamera.transform.position.y - 0.5f;
-            root.transform.position = spawnPos;
+            Debug.LogError("URP/Lit shader not found — check URP is installed correctly");
+            return;
+        }
+
+        foreach (var renderer in renderers)
+        {
+            foreach (var mat in renderer.materials)
+            {
+                Texture baseTex = mat.HasProperty("baseColorTexture") ? mat.GetTexture("baseColorTexture") : null;
+                if (baseTex == null && mat.HasProperty("_BaseMap"))
+                    baseTex = mat.GetTexture("_BaseMap");
+
+                Color baseColor = mat.HasProperty("baseColorFactor") ? mat.GetColor("baseColorFactor") : Color.white;
+
+                mat.shader = urpLit;
+
+                if (baseTex != null)
+                    mat.SetTexture("_BaseMap", baseTex);
+                mat.SetColor("_BaseColor", baseColor);
+            }
         }
     }
 
