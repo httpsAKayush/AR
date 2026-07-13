@@ -20,6 +20,10 @@ public class PatientModelLoader : MonoBehaviour
     [Header("UI Feedback")]
     public TMPro.TextMeshProUGUI statusText;  // optional, for showing status
 
+    [Header("Interaction (optional)")]
+    public TransformGizmo transformGizmo;
+    public AnatomyController anatomyController;
+
     private GameObject currentModel;
     private string lastPatientId;
     private float lastConfidence;
@@ -271,7 +275,34 @@ public class PatientModelLoader : MonoBehaviour
         if (!success)
             throw new Exception("Failed to instantiate GLB scene");
 
+        // TEMPORARY DEBUG — remove after finding correct property name
+        foreach (var renderer in root.GetComponentsInChildren<Renderer>())
+        {
+            foreach (var mat in renderer.materials)
+            {
+                Debug.Log($"=== Material: {mat.name} | Shader: {mat.shader.name} ===");
+                Shader shader = mat.shader;
+                int count = shader.GetPropertyCount();
+                for (int i = 0; i < count; i++)
+                {
+                    var propType = shader.GetPropertyType(i);
+                    string propName = shader.GetPropertyName(i);
+                    if (propType == UnityEngine.Rendering.ShaderPropertyType.Color)
+                    {
+                        Debug.Log($"  COLOR PROPERTY: '{propName}' = {mat.GetColor(propName)}");
+                    }
+                }
+            }
+        }
+
         FixMaterialsForQuest(root);
+        //
+        if (transformGizmo != null)
+            transformGizmo.SetTarget(root.transform);
+
+        if (anatomyController != null)
+            anatomyController.SetBodyRoot(root.transform);
+        //
 
         currentModel = root;
         currentGltfImport = gltfImport;
@@ -288,22 +319,50 @@ public class PatientModelLoader : MonoBehaviour
             return;
         }
 
+        var propBlock = new MaterialPropertyBlock();
+
         foreach (var renderer in renderers)
         {
-            foreach (var mat in renderer.materials)
+            var mats = renderer.materials;
+            for (int i = 0; i < mats.Length; i++)
             {
-                Texture baseTex = mat.HasProperty("baseColorTexture") ? mat.GetTexture("baseColorTexture") : null;
-                if (baseTex == null && mat.HasProperty("_BaseMap"))
-                    baseTex = mat.GetTexture("_BaseMap");
+                var mat = mats[i];
 
-                Color baseColor = mat.HasProperty("baseColorFactor") ? mat.GetColor("baseColorFactor") : Color.white;
+                Color baseColor = Color.white;
+                string[] colorPropNames = { "baseColorFactor", "_BaseColor", "_Color", "BaseColor" };
+                foreach (var propName in colorPropNames)
+                {
+                    if (mat.HasProperty(propName))
+                    {
+                        baseColor = mat.GetColor(propName);
+                        break;
+                    }
+                }
+
+                Texture baseTex = null;
+                string[] texPropNames = { "baseColorTexture", "_BaseMap", "_MainTex" };
+                foreach (var propName in texPropNames)
+                {
+                    if (mat.HasProperty(propName))
+                    {
+                        baseTex = mat.GetTexture(propName);
+                        if (baseTex != null) break;
+                    }
+                }
 
                 mat.shader = urpLit;
-
+                mat.enableInstancing = false;   // force unique draw, avoid batching collapsing colors
+                mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+                mat.SetColor("_BaseColor", baseColor);
                 if (baseTex != null)
                     mat.SetTexture("_BaseMap", baseTex);
-                mat.SetColor("_BaseColor", baseColor);
+
+                // Belt-and-suspenders: also push via MaterialPropertyBlock per-renderer
+                renderer.GetPropertyBlock(propBlock, i);
+                propBlock.SetColor("_BaseColor", baseColor);
+                renderer.SetPropertyBlock(propBlock, i);
             }
+            renderer.materials = mats;
         }
     }
 

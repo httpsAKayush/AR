@@ -14,10 +14,10 @@ public class AnatomyController : MonoBehaviour
     public float proximityRadius = 0.05f;
 
     [Header("Organ Materials")]
-    public Material defaultMaterial;
-    public Material highlightMaterial;
+    public Material highlightMaterial;   // defaultMaterial removed — we now preserve each organ's real color
 
     private Dictionary<string, MeshRenderer> organRenderers = new();
+    private Dictionary<string, Material> originalMaterials = new();
     private string currentOrgan = "";
     private bool calibrating = false;
     private Vector3 calibrationStartPos;
@@ -25,21 +25,6 @@ public class AnatomyController : MonoBehaviour
 
     private InputDevice leftDevice;
     private InputDevice rightDevice;
-
-    void Start()
-    {
-        foreach (Transform child in bodyRoot.GetComponentsInChildren<Transform>())
-        {
-            MeshRenderer mr = child.GetComponent<MeshRenderer>();
-            if (mr != null)
-            {
-                organRenderers[child.name] = mr;
-                if (defaultMaterial != null)
-                    mr.material = defaultMaterial;
-            }
-        }
-        Debug.Log($"AnatomyController: registered {organRenderers.Count} organ meshes");
-    }
 
     void Update()
     {
@@ -52,8 +37,37 @@ public class AnatomyController : MonoBehaviour
         HandleProximity();
     }
 
+    // Call this from PatientModelLoader after a new model finishes loading
+    public void SetBodyRoot(Transform newRoot)
+    {
+        bodyRoot = newRoot;
+        RefreshOrgans();
+    }
+
+    public void RefreshOrgans()
+    {
+        organRenderers.Clear();
+        originalMaterials.Clear();
+        currentOrgan = "";
+
+        if (bodyRoot == null) return;
+
+        foreach (Transform child in bodyRoot.GetComponentsInChildren<Transform>())
+        {
+            MeshRenderer mr = child.GetComponent<MeshRenderer>();
+            if (mr != null)
+            {
+                organRenderers[child.name] = mr;
+                originalMaterials[child.name] = mr.material;   // preserve real per-organ color
+            }
+        }
+        Debug.Log($"AnatomyController: registered {organRenderers.Count} organ meshes");
+    }
+
     void HandleCalibration()
     {
+        if (bodyRoot == null) return;
+
         bool leftGrip = false;
         leftDevice.TryGetFeatureValue(CommonUsages.gripButton, out leftGrip);
 
@@ -94,8 +108,9 @@ public class AnatomyController : MonoBehaviour
 
     void HandleProximity()
     {
+        if (bodyRoot == null) return;
+
         Vector3 toolPos = rightController.position;
-        //Vector3 toolPos = Camera.main.transform.position + Camera.main.transform.forward * 0.5f;
         string closestOrgan = "";
         float closestDist = proximityRadius;
 
@@ -114,8 +129,8 @@ public class AnatomyController : MonoBehaviour
 
         if (closestOrgan != currentOrgan)
         {
-            if (currentOrgan != "" && organRenderers.ContainsKey(currentOrgan))
-                organRenderers[currentOrgan].material = defaultMaterial;
+            if (currentOrgan != "" && organRenderers.ContainsKey(currentOrgan) && originalMaterials.ContainsKey(currentOrgan))
+                organRenderers[currentOrgan].material = originalMaterials[currentOrgan];   // restore real color, not a shared default
 
             currentOrgan = closestOrgan;
 

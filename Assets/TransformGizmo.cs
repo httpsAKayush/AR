@@ -14,12 +14,22 @@ public class TransformGizmo : MonoBehaviour
     public float arrowLength = 0.4f;
     public float handleSize = 0.03f;
 
+    [Header("Controller Reference")]
+    public Transform rightControllerTransform;   // assign in Inspector — reliable, no Find()
+
+    [Header("Left Joystick Rotation")]
+    public float joystickRotateSpeed = 90f;      // degrees/sec at full stick deflection
+
+    // Axis color key:
+    //   matX (red)   -> X axis  (RingX: rotate around X)
+    //   matY (green) -> Y axis  (RingY: rotate around Y | ScaleHandle: uniform scale, vertical arrow)
+    //   matZ (blue)  -> Z axis  (RingZ: rotate around Z)
     private Material matX, matY, matZ, matW, matHighlight;
 
     private GameObject ringX, ringY, ringZ;
     private GameObject gizmoRotationRoot;
 
-    private GameObject arrowX, arrowY, arrowZ, arrowUniform;
+    private GameObject scaleHandle;   // single vertical handle, drives uniform scale on all 3 axes
     private GameObject gizmoScaleRoot;
 
     private bool showRotation = false;
@@ -31,7 +41,6 @@ public class TransformGizmo : MonoBehaviour
 
     private InputDevice leftDevice;
     private InputDevice rightDevice;
-    private Transform rightControllerTransform;
     private LineRenderer rayLine;
 
     private bool aWasPressed = false;
@@ -60,15 +69,10 @@ public class TransformGizmo : MonoBehaviour
         if (!rightDevice.isValid)
             rightDevice = InputDevices.GetDeviceAtXRNode(XRNode.RightHand);
 
-        if (rightControllerTransform == null)
-        {
-            var go = GameObject.Find("Right Controller");
-            if (go != null) rightControllerTransform = go.transform;
-        }
-
         HandleButtonToggles();
         UpdateGizmoPositions();
         HandleRayInteraction();
+        HandleLeftJoystickRotation();   // <-- new: left stick rotates model around Y axis (green)
 
 #if UNITY_EDITOR
         if (UnityEngine.InputSystem.Keyboard.current != null)
@@ -77,6 +81,21 @@ public class TransformGizmo : MonoBehaviour
             if (UnityEngine.InputSystem.Keyboard.current.digit2Key.wasPressedThisFrame) ToggleScale();
         }
 #endif
+    }
+
+    // Left joystick X-axis -> continuous Y-axis (green) rotation, independent of the ring gizmo.
+    // Same pattern as AnatomyController's right-stick rotate, just mirrored to the left hand.
+    void HandleLeftJoystickRotation()
+    {
+        if (bodyRoot == null) return;
+
+        Vector2 leftStick = Vector2.zero;
+        leftDevice.TryGetFeatureValue(CommonUsages.primary2DAxis, out leftStick);
+
+        if (Mathf.Abs(leftStick.x) > 0.1f)
+        {
+            bodyRoot.Rotate(Vector3.up, leftStick.x * joystickRotateSpeed * Time.deltaTime, Space.World);
+        }
     }
 
     void HandleButtonToggles()
@@ -174,7 +193,7 @@ public class TransformGizmo : MonoBehaviour
 
         List<GameObject> handles = showRotation
             ? new List<GameObject> { ringX, ringY, ringZ }
-            : new List<GameObject> { arrowX, arrowY, arrowZ, arrowUniform };
+            : new List<GameObject> { scaleHandle };   // only the single uniform-scale handle now
 
         foreach (var handle in handles)
         {
@@ -201,42 +220,21 @@ public class TransformGizmo : MonoBehaviour
         if (showRotation)
         {
             float speed = 200f;
-            if (handle == ringX)
+            if (handle == ringX)              // red — rotate around X
                 bodyRoot.Rotate(Vector3.right, -delta.y * speed, Space.World);
-            else if (handle == ringY)
+            else if (handle == ringY)         // green — rotate around Y
                 bodyRoot.Rotate(Vector3.up, delta.x * speed, Space.World);
-            else if (handle == ringZ)
-                bodyRoot.Rotate(Vector3.forward, -delta.x * speed, Space.World);
+            else if (handle == ringZ)         // blue — rotate around Z (sign flipped — was inverted before)
+                bodyRoot.Rotate(Vector3.forward, delta.x * speed, Space.World);
         }
         else if (showScale)
         {
+            // Single vertical (green/Y) handle drives uniform scale on all 3 axes together.
             float speed = 2f;
-
-            if (handle == arrowUniform)
+            if (handle == scaleHandle)
             {
                 bodyRoot.localScale += Vector3.one * delta.y * speed;
                 bodyRoot.localScale = Vector3.Max(bodyRoot.localScale, Vector3.one * 0.05f);
-            }
-            else if (handle == arrowX)
-            {
-                Vector3 s = bodyRoot.localScale;
-                s.x += delta.x * speed;
-                s.x = Mathf.Max(s.x, 0.05f);
-                bodyRoot.localScale = s;
-            }
-            else if (handle == arrowY)
-            {
-                Vector3 s = bodyRoot.localScale;
-                s.y += delta.y * speed;
-                s.y = Mathf.Max(s.y, 0.05f);
-                bodyRoot.localScale = s;
-            }
-            else if (handle == arrowZ)
-            {
-                Vector3 s = bodyRoot.localScale;
-                s.z += delta.z * speed;
-                s.z = Mathf.Max(s.z, 0.05f);
-                bodyRoot.localScale = s;
             }
         }
     }
@@ -250,9 +248,9 @@ public class TransformGizmo : MonoBehaviour
     void ResetHandleColor(GameObject handle)
     {
         Material mat = null;
-        if (handle == ringX || handle == arrowX) mat = matX;
-        else if (handle == ringY || handle == arrowY) mat = matY;
-        else if (handle == ringZ || handle == arrowZ) mat = matZ;
+        if (handle == ringX) mat = matX;               // red
+        else if (handle == ringY || handle == scaleHandle) mat = matY;  // green
+        else if (handle == ringZ) mat = matZ;           // blue
         else mat = matW;
 
         foreach (var mr in handle.GetComponentsInChildren<MeshRenderer>())
@@ -261,10 +259,10 @@ public class TransformGizmo : MonoBehaviour
 
     void CreateMaterials()
     {
-        matX = CreateUnlitMaterial(new Color(1f, 0.2f, 0.2f));
-        matY = CreateUnlitMaterial(new Color(0.2f, 1f, 0.2f));
-        matZ = CreateUnlitMaterial(new Color(0.2f, 0.4f, 1f));
-        matW = CreateUnlitMaterial(new Color(1f, 1f, 1f, 0.8f));
+        matX = CreateUnlitMaterial(new Color(1f, 0.2f, 0.2f));    // red   — X axis
+        matY = CreateUnlitMaterial(new Color(0.2f, 1f, 0.2f));    // green — Y axis / uniform scale
+        matZ = CreateUnlitMaterial(new Color(0.2f, 0.4f, 1f));    // blue  — Z axis
+        matW = CreateUnlitMaterial(new Color(1f, 1f, 1f, 0.8f));  // white — ray line
         matHighlight = CreateUnlitMaterial(new Color(1f, 0.9f, 0f));
     }
 
@@ -279,15 +277,15 @@ public class TransformGizmo : MonoBehaviour
     {
         gizmoRotationRoot = new GameObject("GizmoRotation");
 
-        ringX = CreateRing("RingX", matX);
+        ringX = CreateRing("RingX", matX);   // red — X axis
         ringX.transform.SetParent(gizmoRotationRoot.transform);
         ringX.transform.localRotation = Quaternion.Euler(0, 90, 0);
 
-        ringY = CreateRing("RingY", matY);
+        ringY = CreateRing("RingY", matY);   // green — Y axis
         ringY.transform.SetParent(gizmoRotationRoot.transform);
         ringY.transform.localRotation = Quaternion.Euler(90, 0, 0);
 
-        ringZ = CreateRing("RingZ", matZ);
+        ringZ = CreateRing("RingZ", matZ);   // blue — Z axis
         ringZ.transform.SetParent(gizmoRotationRoot.transform);
         ringZ.transform.localRotation = Quaternion.Euler(0, 0, 0);
     }
@@ -364,30 +362,21 @@ public class TransformGizmo : MonoBehaviour
         return mesh;
     }
 
+    // Only one handle now: a vertical (green) arrow. Drag up/down -> scales
+    // bodyRoot uniformly on X/Y/Z together. No more per-axis scale, no center cube.
     void CreateScaleGizmo()
     {
         gizmoScaleRoot = new GameObject("GizmoScale");
 
-        arrowX = CreateArrow("ArrowX", matX);
-        arrowY = CreateArrow("ArrowY", matY);
-        arrowZ = CreateArrow("ArrowZ", matZ);
-        arrowUniform = CreateCube("ArrowUniform", matW, handleSize * 1.5f);
+        scaleHandle = CreateArrow("ScaleHandle", matY);   // green, vertical
+        scaleHandle.transform.SetParent(gizmoScaleRoot.transform);
+        scaleHandle.transform.localRotation = Quaternion.identity;
+        scaleHandle.transform.localPosition = new Vector3(0, arrowLength * 0.5f, 0);
+    }
 
-        arrowX.transform.SetParent(gizmoScaleRoot.transform);
-        arrowY.transform.SetParent(gizmoScaleRoot.transform);
-        arrowZ.transform.SetParent(gizmoScaleRoot.transform);
-        arrowUniform.transform.SetParent(gizmoScaleRoot.transform);
-
-        arrowX.transform.localRotation = Quaternion.Euler(0, 0, -90);
-        arrowX.transform.localPosition = new Vector3(arrowLength * 0.5f, 0, 0);
-
-        arrowY.transform.localRotation = Quaternion.identity;
-        arrowY.transform.localPosition = new Vector3(0, arrowLength * 0.5f, 0);
-
-        arrowZ.transform.localRotation = Quaternion.Euler(90, 0, 0);
-        arrowZ.transform.localPosition = new Vector3(0, 0, arrowLength * 0.5f);
-
-        arrowUniform.transform.localPosition = Vector3.zero;
+    public void SetTarget(Transform newTarget)
+    {
+        bodyRoot = newTarget;
     }
 
     GameObject CreateArrow(string name, Material mat)
