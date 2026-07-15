@@ -114,7 +114,7 @@ namespace MetaXR.LofiStudy.ARFoundation
                 while (m_Running &&
                     (ultrasoundDiscovery == null || !ultrasoundDiscovery.IsDiscovered))
                 {
-                    Debug.Log("[CameraFeedReceiver] Waiting for server discovery...");
+                    // Debug.Log("[CameraFeedReceiver] Waiting for server discovery...");
                     Thread.Sleep(500);
                 }
 

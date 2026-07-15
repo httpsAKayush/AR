@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using GLTFast;
 using GLTFast.Logging;
+using MetaXR.LofiStudy.ARFoundation;
 
 public class PatientModelLoader : MonoBehaviour
 {
@@ -23,6 +24,9 @@ public class PatientModelLoader : MonoBehaviour
     [Header("Interaction (optional)")]
     public TransformGizmo transformGizmo;
     public AnatomyController anatomyController;
+
+    [Header("Layer Panel (optional)")]
+    public LayerControlPanel layerControlPanel;
 
     private GameObject currentModel;
     private string lastPatientId;
@@ -296,6 +300,10 @@ public class PatientModelLoader : MonoBehaviour
         }
 
         FixMaterialsForQuest(root);
+        //
+        if (layerControlPanel != null)
+            layerControlPanel.BuildLayerPanel(root.transform);
+
         //
         if (transformGizmo != null)
             transformGizmo.SetTarget(root.transform);
