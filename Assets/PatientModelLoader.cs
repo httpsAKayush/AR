@@ -327,8 +327,6 @@ public class PatientModelLoader : MonoBehaviour
             return;
         }
 
-        var propBlock = new MaterialPropertyBlock();
-
         foreach (var renderer in renderers)
         {
             var mats = renderer.materials;
@@ -359,18 +357,13 @@ public class PatientModelLoader : MonoBehaviour
                 }
 
                 mat.shader = urpLit;
-                mat.enableInstancing = false;   // force unique draw, avoid batching collapsing colors
-                mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+                mat.enableInstancing = false;
+                //mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
                 mat.SetColor("_BaseColor", baseColor);
                 if (baseTex != null)
                     mat.SetTexture("_BaseMap", baseTex);
-
-                // Belt-and-suspenders: also push via MaterialPropertyBlock per-renderer
-                renderer.GetPropertyBlock(propBlock, i);
-                propBlock.SetColor("_BaseColor", baseColor);
-                renderer.SetPropertyBlock(propBlock, i);
             }
-            renderer.materials = mats;
+            renderer.materials = mats;   // each renderer gets its own unique material instances — no shared/batched color
         }
     }
 
