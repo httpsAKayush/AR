@@ -6,14 +6,6 @@ using UnityEngine.XR.Interaction.Toolkit.Interactables;
 
 namespace MetaXR.LofiStudy.ARFoundation
 {
-    /// <summary>
-    /// Builds a floating, grabbable panel listing every mesh/segment under a
-    /// loaded patient model (e.g. "raw_body_surface", "Segment_5", ...), with
-    /// per-layer Show/Hide toggle and Highlight buttons.
-    ///
-    /// Call BuildLayerPanel(modelRoot) after a new model finishes loading —
-    /// same pattern as MicrusControlPanel.BuildControlPanels().
-    /// </summary>
     public class LayerControlPanel : MonoBehaviour
     {
         [Header("Panel Appearance")]
@@ -22,6 +14,7 @@ namespace MetaXR.LofiStudy.ARFoundation
         public Color toggleOnColor      = new Color(0.20f, 0.55f, 0.20f, 1f);
         public Color toggleOffColor     = new Color(0.45f, 0.20f, 0.20f, 1f);
         public Color highlightBtnColor  = new Color(0.25f, 0.35f, 0.55f, 1f);
+        public Color transparencyBtnColor = new Color(0.35f, 0.30f, 0.55f, 1f);
         public Color labelColor         = Color.white;
         public float fontSize           = 13f;
         public float panelWidth         = 0.55f;
@@ -29,9 +22,12 @@ namespace MetaXR.LofiStudy.ARFoundation
         [Header("Highlight")]
         public Color highlightTintColor = new Color(1f, 0.9f, 0f, 1f);
 
+        [Header("Transparency")]
+        [Range(0.1f, 1f)] public float transparentAlpha = 0.3f;
+
         [Header("Placement")]
-        public float sideOffset = 0.35f;   // distance to the side of the model
-        public float heightOffset = 0.3f;  // raised above model center
+        public float sideOffset = 0.35f;
+        public float heightOffset = 0.3f;
 
         [Header("Grab Bar Settings")]
         public float grabBarHeight = 0.05f;
@@ -40,24 +36,24 @@ namespace MetaXR.LofiStudy.ARFoundation
         GameObject m_Panel;
         Transform  m_ModelRoot;
 
-        // Per-layer state, keyed by the renderer itself (unique per model instance)
         readonly Dictionary<Renderer, LayerEntry> m_Layers = new Dictionary<Renderer, LayerEntry>();
 
         class LayerEntry
         {
             public Renderer  renderer;
-            public Material  originalMaterial;
+            public Color     originalColor;      // cached VALUE, not a material reference
             public bool      visible = true;
             public bool      highlighted = false;
+            public bool      transparent = false;
             public Image     toggleButtonImage;
             public TextMeshProUGUI toggleButtonText;
+            public Image     transparencyButtonImage;
         }
 
         // ── Public API ───────────────────────────────────────────────────────────
 
         public void BuildLayerPanel(Transform modelRoot)
         {
-            // Clear any previous panel/state — a new model was loaded
             if (m_Panel != null)
                 Destroy(m_Panel);
             m_Layers.Clear();
@@ -65,9 +61,14 @@ namespace MetaXR.LofiStudy.ARFoundation
             m_ModelRoot = modelRoot;
 
             Vector3 worldPos = modelRoot.position
-                                + modelRoot.right * -sideOffset   // to the left of the model
+                                + modelRoot.right * -sideOffset
                                 + Vector3.up * heightOffset;
-            Quaternion worldRot = modelRoot.rotation;
+
+            // Fix: model's own rotation faces away from the viewer for a
+            // world-space Canvas placed beside it — rotate 180° on Y so the
+            // panel faces the same way a person standing in front of the
+            // model (and the panel) would expect to read it.
+            Quaternion worldRot = modelRoot.rotation * Quaternion.Euler(0f, 180f, 0f);
 
             m_Panel = CreatePanel("LayerControlPanel", worldPos, worldRot, panelWidth);
 
@@ -89,7 +90,6 @@ namespace MetaXR.LofiStudy.ARFoundation
             foreach (var r in renderers)
                 AddLayerRow(m_Panel, r);
 
-            // Grab bar needs to track the panel's real post-layout height
             AttachGrabTracking(m_Panel, panelWidth);
         }
 
@@ -125,10 +125,18 @@ namespace MetaXR.LofiStudy.ARFoundation
 
         void AddLayerRow(GameObject panel, MeshRenderer renderer)
         {
+            // renderer.material (getter) creates ONE instance and caches it on
+            // the renderer — every subsequent .material call returns that same
+            // instance. So we must capture the ORIGINAL COLOR VALUE here, not
+            // just hold a reference to the material — otherwise "restoring"
+            // later just reads back the color we already overwrote.
+            var mat = renderer.material;
+            Color originalColor = mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") : Color.white;
+
             var entry = new LayerEntry
             {
                 renderer = renderer,
-                originalMaterial = renderer.material,   // instance copy, safe to tint/restore
+                originalColor = originalColor,
                 visible = renderer.enabled,
             };
             m_Layers[renderer] = entry;
@@ -143,12 +151,12 @@ namespace MetaXR.LofiStudy.ARFoundation
             hlg.childControlHeight = true;
             hlg.childForceExpandWidth = false;
 
-            // Layer name label — takes most of the row width
+            // Layer name label
             var labelGo = new GameObject("Label");
             labelGo.transform.SetParent(row.transform, false);
             var labelLe = labelGo.AddComponent<LayoutElement>();
             labelLe.flexibleWidth = 1f;
-            var labelRt = labelGo.AddComponent<RectTransform>();
+            labelGo.AddComponent<RectTransform>();
             var labelImg = labelGo.AddComponent<Image>();
             labelImg.color = rowBgColor;
             var labelTextGo = new GameObject("Text");
@@ -165,10 +173,14 @@ namespace MetaXR.LofiStudy.ARFoundation
             labelTmp.alignment = TextAlignmentOptions.MidlineLeft;
 
             // Highlight button
-            CreateFixedButton(row, "★", highlightBtnColor, 34f, () => ToggleHighlight(entry));
+            CreateFixedButton(row, "★", highlightBtnColor, 32f, () => ToggleHighlight(entry));
+
+            // Transparency button — sits beside the hide/show toggle
+            var transGo = CreateFixedButton(row, "T", transparencyBtnColor, 32f, () => ToggleTransparency(entry));
+            entry.transparencyButtonImage = transGo.GetComponent<Image>();
 
             // Show/Hide toggle button
-            var toggleGo = CreateFixedButton(row, "ON", toggleOnColor, 46f, () => ToggleVisible(entry));
+            var toggleGo = CreateFixedButton(row, "ON", toggleOnColor, 42f, () => ToggleVisible(entry));
             entry.toggleButtonImage = toggleGo.GetComponent<Image>();
             entry.toggleButtonText  = toggleGo.GetComponentInChildren<TextMeshProUGUI>();
 
@@ -177,7 +189,6 @@ namespace MetaXR.LofiStudy.ARFoundation
 
         string FormatLayerName(string raw)
         {
-            // "raw_body_surface" -> "Raw Body Surface", "Segment_5" -> "Segment 5"
             string s = raw.Replace("_", " ");
             return s.Length > 0 ? char.ToUpper(s[0]) + s.Substring(1) : s;
         }
@@ -200,23 +211,75 @@ namespace MetaXR.LofiStudy.ARFoundation
         void ToggleHighlight(LayerEntry entry)
         {
             entry.highlighted = !entry.highlighted;
+            ApplyMaterialState(entry);
+        }
 
-            if (entry.highlighted)
+        void ToggleTransparency(LayerEntry entry)
+        {
+            entry.transparent = !entry.transparent;
+
+            if (entry.transparencyButtonImage != null)
+                entry.transparencyButtonImage.color = entry.transparent
+                    ? transparencyBtnColor * 1.4f
+                    : transparencyBtnColor;
+
+            ApplyMaterialState(entry);
+        }
+
+        // Single place that combines highlight + transparency + original color,
+        // so toggling one doesn't stomp on the other's effect.
+        void ApplyMaterialState(LayerEntry entry)
+        {
+            var mat = entry.renderer.material;
+            if (!mat.HasProperty("_BaseColor")) return;
+
+            Color baseColor = entry.highlighted ? highlightTintColor : entry.originalColor;
+
+            if (entry.transparent)
             {
-                // Tint via material color — works with the URP/Lit materials
-                // set up by FixMaterialsForQuest on the loaded model.
-                if (entry.renderer.material.HasProperty("_BaseColor"))
-                    entry.renderer.material.SetColor("_BaseColor", highlightTintColor);
+                SetMaterialTransparent(mat);
+                baseColor.a = transparentAlpha;
             }
             else
             {
-                if (entry.renderer.material.HasProperty("_BaseColor") &&
-                    entry.originalMaterial.HasProperty("_BaseColor"))
-                    entry.renderer.material.SetColor("_BaseColor", entry.originalMaterial.GetColor("_BaseColor"));
+                SetMaterialOpaque(mat);
+                baseColor.a = 1f;
             }
+
+            mat.SetColor("_BaseColor", baseColor);
         }
 
-        // ── Panel scaffold (same pattern as MicrusControlPanel) ─────────────────
+        // URP/Lit requires switching the surface type + render queue + blend
+        // mode to actually render translucently — just lowering alpha on an
+        // Opaque surface has no visible effect.
+        void SetMaterialTransparent(Material mat)
+        {
+            mat.SetFloat("_Surface", 1f); // 1 = Transparent
+            mat.SetFloat("_Blend", 0f);   // Alpha blend
+            mat.SetOverrideTag("RenderType", "Transparent");
+            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            mat.SetInt("_ZWrite", 0);
+            mat.DisableKeyword("_ALPHATEST_ON");
+            mat.EnableKeyword("_ALPHABLEND_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+        }
+
+        void SetMaterialOpaque(Material mat)
+        {
+            mat.SetFloat("_Surface", 0f); // 0 = Opaque
+            mat.SetOverrideTag("RenderType", "Opaque");
+            mat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+            mat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+            mat.SetInt("_ZWrite", 1);
+            mat.DisableKeyword("_ALPHATEST_ON");
+            mat.DisableKeyword("_ALPHABLEND_ON");
+            mat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+        }
+
+        // ── Panel scaffold ───────────────────────────────────────────────────────
 
         GameObject CreatePanel(string name, Vector3 worldPos, Quaternion worldRot, float w)
         {
@@ -230,7 +293,7 @@ namespace MetaXR.LofiStudy.ARFoundation
             canvas.worldCamera = Camera.main;
 
             var rt = go.GetComponent<RectTransform>();
-            rt.sizeDelta  = new Vector2(w * 1000f, 200f);   // starting height; ContentSizeFitter will shrink/grow to fit
+            rt.sizeDelta  = new Vector2(w * 1000f, 200f);
             rt.localScale = new Vector3(0.001f, 0.001f, 0.001f);
 
             var raycaster = go.AddComponent<UnityEngine.XR.Interaction.Toolkit.UI.TrackedDeviceGraphicRaycaster>();
