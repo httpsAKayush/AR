@@ -316,6 +316,98 @@ public class PatientModelLoader : MonoBehaviour
         currentGltfImport = gltfImport;
     }
 
+    // Mirrors ct_pipeline/model/mesh_export.py's ORGAN_COLORS + MERGE_GROUPS
+    // overrides, and raw_export.py's SKIN_COLOR — kept as an ordered list
+    // (not Dictionary) so lookup order exactly matches Python's dict
+    // iteration order, since get_color() there returns the FIRST key found
+    // as a substring.
+    private static readonly (string key, Color32 color)[] OrganColors = new (string, Color32)[]
+    {
+        ("liver",                        new Color32(194, 100,  60, 180)),
+        ("spleen",                       new Color32(160,  60, 120, 180)),
+        ("kidney_left",                  new Color32(210, 140,  80, 180)),
+        ("kidney_right",                 new Color32(210, 140,  80, 180)),
+        ("pancreas",                     new Color32(220, 180, 100, 180)),
+        ("stomach",                      new Color32(180, 160, 120, 180)),
+        ("gallbladder",                  new Color32(180, 200,  80, 180)),
+        ("heart",                        new Color32(200,  60,  60, 200)),
+        ("small_bowel",                  new Color32(200, 160, 140, 160)),
+        ("colon",                        new Color32(180, 130, 100, 160)),
+        ("duodenum",                     new Color32(190, 150, 110, 160)),
+        ("urinary_bladder",              new Color32(100, 160, 200, 160)),
+        ("esophagus",                    new Color32(160, 100, 100, 160)),
+        ("trachea",                      new Color32(140, 180, 200, 160)),
+        ("spinal_cord",                  new Color32(220, 220, 160, 180)),
+        ("lung_upper_lobe_left",         new Color32(140, 180, 220, 150)),
+        ("lung_lower_lobe_left",         new Color32(140, 180, 220, 150)),
+        ("lung_upper_lobe_right",        new Color32(140, 180, 220, 150)),
+        ("lung_lower_lobe_right",        new Color32(140, 180, 220, 150)),
+        ("lung_middle_lobe_right",       new Color32(140, 180, 220, 150)),
+        ("aorta",                        new Color32(220,  60,  60, 200)),
+        ("inferior_vena_cava",           new Color32( 60,  60, 220, 200)),
+        ("portal_vein_and_splenic_vein", new Color32( 80, 100, 200, 180)),
+        ("pulmonary_vein",               new Color32(100, 100, 220, 180)),
+        ("adrenal_gland_left",           new Color32(180, 200, 140, 160)),
+        ("adrenal_gland_right",          new Color32(180, 200, 140, 160)),
+        ("skeleton",                     new Color32(220, 210, 180, 200)),
+        ("left_lung",                    new Color32(140, 180, 220, 150)),
+        ("right_lung",                   new Color32(140, 180, 220, 150)),
+        ("muscles",                      new Color32(180, 120, 100, 140)),
+    };
+
+    // raw_export.py's SKIN_COLOR — not in ORGAN_COLORS on the Python side
+    // (separate constant there too), matched here by the fixed node name
+    // merge_export.py always gives it: "raw_body_surface".
+    private static readonly Color32 RawSurfaceColor = new Color32(210, 180, 140, 200);
+
+    // Python's ORGAN_COLORS["__default__"]
+    private static readonly Color32 DefaultOrganColor = new Color32(200, 200, 200, 160);
+
+    /// <summary>
+    /// Mirrors mesh_export.py's get_color(): first substring match wins.
+    /// Walks up from the renderer's own GameObject to the model root, since
+    /// glTFast sometimes puts the mesh on a child (e.g. "Primitive0") under
+    /// a parent named after the real node ("liver") — checking ancestors
+    /// finds the real name even when the renderer's own GameObject doesn't.
+    /// Returns null if nothing matched, so the caller can fall back to a
+    /// distinct-per-layer color instead of one flat default.
+    /// </summary>
+    private static Color32? GetColorForRenderer(Renderer renderer, Transform root)
+    {
+        Transform t = renderer.transform;
+        while (t != null)
+        {
+            string lower = t.name.ToLowerInvariant();
+
+            if (lower.Contains("raw_body_surface") || lower.Contains("raw_surface"))
+                return RawSurfaceColor;
+
+            foreach (var (key, color) in OrganColors)
+            {
+                if (lower.Contains(key))
+                    return color;
+            }
+
+            if (t == root) break;
+            t = t.parent;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Deterministic, visually distinct color for layers with no name match —
+    /// golden-ratio hue stepping so consecutive indices land far apart on the
+    /// color wheel instead of clustering.
+    /// </summary>
+    private static Color32 GetFallbackColor(int index)
+    {
+        const float goldenRatioConjugate = 0.61803398875f;
+        float hue = (index * goldenRatioConjugate) % 1f;
+        Color c = Color.HSVToRGB(hue, 0.65f, 0.95f);
+        return new Color32(
+            (byte)(c.r * 255), (byte)(c.g * 255), (byte)(c.b * 255), 220);
+    }
+
     private void FixMaterialsForQuest(GameObject root)
     {
         var renderers = root.GetComponentsInChildren<Renderer>();
@@ -327,41 +419,48 @@ public class PatientModelLoader : MonoBehaviour
             return;
         }
 
-        foreach (var renderer in renderers)
+        for (int r = 0; r < renderers.Length; r++)
         {
+            var renderer = renderers[r];
+
+            // TEMP DEBUG — prints the full ancestor chain checked for a
+            // match, so if colors still look wrong you can see the actual
+            // GameObject names glTFast produced and tell me what they are.
+            {
+                var names = new System.Collections.Generic.List<string>();
+                Transform dt = renderer.transform;
+                while (dt != null) { names.Add(dt.name); if (dt == root.transform) break; dt = dt.parent; }
+                Debug.Log($"[FixMaterialsForQuest] renderer #{r} hierarchy: {string.Join(" < ", names)}");
+            }
+
+            Color32? matched = GetColorForRenderer(renderer, root.transform);
+            Color32 organColor32 = matched ?? GetFallbackColor(r);
+            if (matched == null)
+                Debug.Log($"[FixMaterialsForQuest] renderer #{r} — no name match, using fallback color {organColor32}");
+
+            Color organColor = new Color(
+                organColor32.r / 255f, organColor32.g / 255f,
+                organColor32.b / 255f, organColor32.a / 255f);
+
             var mats = renderer.materials;
             for (int i = 0; i < mats.Length; i++)
             {
                 var mat = mats[i];
-
-                Color baseColor = Color.white;
-                string[] colorPropNames = { "baseColorFactor", "_BaseColor", "_Color", "BaseColor" };
-                foreach (var propName in colorPropNames)
-                {
-                    if (mat.HasProperty(propName))
-                    {
-                        baseColor = mat.GetColor(propName);
-                        break;
-                    }
-                }
-
-                Texture baseTex = null;
-                string[] texPropNames = { "baseColorTexture", "_BaseMap", "_MainTex" };
-                foreach (var propName in texPropNames)
-                {
-                    if (mat.HasProperty(propName))
-                    {
-                        baseTex = mat.GetTexture(propName);
-                        if (baseTex != null) break;
-                    }
-                }
-
                 mat.shader = urpLit;
                 mat.enableInstancing = false;
-                //mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
-                mat.SetColor("_BaseColor", baseColor);
-                if (baseTex != null)
-                    mat.SetTexture("_BaseMap", baseTex);
+                mat.SetColor("_BaseColor", organColor);
+
+                // Colors carry alpha < 255 on purpose (semi-transparent
+                // anatomy viewing) — URP Lit defaults to Opaque, which
+                // ignores alpha unless surface type is set to Transparent.
+                if (organColor32.a < 255)
+                {
+                    mat.SetFloat("_Surface", 1f); // 0 = Opaque, 1 = Transparent
+                    mat.SetFloat("_Blend", 0f);   // 0 = Alpha blend
+                    mat.SetOverrideTag("RenderType", "Transparent");
+                    mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                    mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                }
             }
             renderer.materials = mats;   // each renderer gets its own unique material instances — no shared/batched color
         }
