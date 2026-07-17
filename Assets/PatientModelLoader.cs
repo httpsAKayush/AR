@@ -18,6 +18,13 @@ public class PatientModelLoader : MonoBehaviour
     [Header("Scene")]
     public Transform spawnParent;   // where the loaded model will be placed
 
+    [Header("Spawn Position")]
+    private float spawnDistance  = 0.69f;
+    private float verticalOffset = 0f;
+
+    [Header("References")]
+    public Transform cameraTransform;
+
     [Header("UI Feedback")]
     public TMPro.TextMeshProUGUI statusText;  // optional, for showing status
 
@@ -43,6 +50,12 @@ public class PatientModelLoader : MonoBehaviour
 
     private GltfImport currentGltfImport;
 
+    void Awake()
+    {
+        if (cameraTransform == null && Camera.main != null)
+            cameraTransform = Camera.main.transform;
+    }
+
     void Start()
     {
         StartServerDiscovery();
@@ -67,6 +80,30 @@ public class PatientModelLoader : MonoBehaviour
         }
 
         StopServerDiscovery();
+    }
+
+    // ── Spawn positioning (same pattern as CameraFeedSpawner) ───────────────
+
+    private void PositionSpawnParentInFrontOfCamera()
+    {
+        if (spawnParent == null || cameraTransform == null) return;
+
+        var forward = cameraTransform.forward;
+        forward.y   = 0;
+        forward.Normalize();
+
+        var spawnPosition = cameraTransform.position
+                            + forward * spawnDistance
+                            + Vector3.up * verticalOffset;
+
+        var lookDir       = spawnPosition - cameraTransform.position;
+        lookDir.y         = 0;
+        var spawnRotation = lookDir.sqrMagnitude > 0.001f
+                            ? Quaternion.LookRotation(lookDir.normalized, Vector3.up) * Quaternion.Euler(0f, 180f, 0f)
+                            : Quaternion.identity;
+
+        spawnParent.position = spawnPosition;
+        spawnParent.rotation = spawnRotation;
     }
 
     private void StartServerDiscovery()
@@ -159,6 +196,8 @@ public class PatientModelLoader : MonoBehaviour
             return;
         }
         isMatching = true;
+
+        PositionSpawnParentInFrontOfCamera();
 
         if (currentGltfImport != null)
         {
